@@ -2,7 +2,7 @@ mod api;
 mod domain;
 mod repository;
 
-use crate::api::handlers;
+use crate::api::handlers::{cluster, documents, indices, search};
 use crate::repository::store::InMemoryStore;
 use axum::{
     Router, middleware,
@@ -37,39 +37,39 @@ async fn main() {
     println!("Listening on: http://{}", addr);
 
     let app = Router::new()
-        .route("/", get(handlers::info))
-        .route("/_cluster/health", get(handlers::cluster_health))
-        .route("/_bulk", post(handlers::bulk))
-        .route("/{index}/_bulk", post(handlers::bulk))
-        .route("/{index}/_refresh", post(handlers::refresh))
+        .route("/", get(cluster::info))
+        .route("/_cluster/health", get(cluster::cluster_health))
+        .route("/_bulk", post(documents::bulk))
+        .route("/{index}/_bulk", post(documents::bulk))
+        .route("/{index}/_refresh", post(indices::refresh))
         .route(
             "/{index}",
-            put(handlers::create_index)
-                .head(handlers::check_index)
-                .delete(handlers::delete_index),
+            put(indices::create_index)
+                .head(indices::check_index)
+                .delete(indices::delete_index),
         )
         .route(
             "/{index}/_mapping",
-            get(handlers::get_mapping).put(handlers::put_mapping),
+            get(indices::get_mapping).put(indices::put_mapping),
         )
-        .route("/{index}/_settings", get(handlers::get_settings))
-        .route("/{index}/_mappings", get(handlers::get_mapping))
-        .route("/{index}/_doc", post(handlers::index_document))
+        .route("/{index}/_settings", get(indices::get_settings))
+        .route("/{index}/_mappings", get(indices::get_mapping))
+        .route("/{index}/_doc", post(documents::index_document))
         .route(
             "/{index}/_doc/{id}",
-            get(handlers::get_document)
-                .put(handlers::index_document_with_id)
-                .post(handlers::index_document_with_id)
-                .delete(handlers::delete_document),
+            get(documents::get_document)
+                .put(documents::index_document_with_id)
+                .post(documents::index_document_with_id)
+                .delete(documents::delete_document),
         )
-        .route("/{index}/_update/{id}", post(handlers::update_document))
+        .route("/{index}/_update/{id}", post(documents::update_document))
         .route(
             "/{index}/_search",
-            post(handlers::search).get(handlers::search),
+            post(search::search).get(search::search),
         )
         .route(
             "/{index}/_count",
-            post(handlers::count).get(handlers::count),
+            post(search::count).get(search::count),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
