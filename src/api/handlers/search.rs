@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -117,6 +117,7 @@ mod tests {
     use super::*;
     use crate::api::handlers::setup_state;
     use crate::domain::mapping::Mapping;
+    use serde_json::json;
 
     #[tokio::test]
     async fn should_search_with_aggregations() {

@@ -7,11 +7,12 @@ use crate::repository::store::InMemoryStore;
 use axum::{
     Router, middleware,
     routing::{get, post, put},
+    http::{HeaderValue, header},
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-
+use tower_http::set_header::SetResponseHeaderLayer;
 pub struct AppState {
     pub store: InMemoryStore,
     pub auth_user: String,
@@ -65,6 +66,10 @@ async fn main() {
         .route("/{index}/_update/{id}", post(documents::update_document))
         .route("/{index}/_search", post(search::search).get(search::search))
         .route("/{index}/_count", post(search::count).get(search::count))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::HeaderName::from_static("x-elastic-product"),
+            HeaderValue::from_static("Elasticsearch"),
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth::basic_auth,
