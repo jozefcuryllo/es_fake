@@ -37,7 +37,7 @@ async fn main() {
     println!("Listening on: http://{}", addr);
 
     let app = Router::new()
-        .route("/", get(cluster::info))
+        .route("/", get(cluster::info).head(cluster::ping))
         .route("/_cluster/health", get(cluster::cluster_health))
         .route("/_bulk", post(documents::bulk))
         .route("/{index}/_bulk", post(documents::bulk))
@@ -63,14 +63,8 @@ async fn main() {
                 .delete(documents::delete_document),
         )
         .route("/{index}/_update/{id}", post(documents::update_document))
-        .route(
-            "/{index}/_search",
-            post(search::search).get(search::search),
-        )
-        .route(
-            "/{index}/_count",
-            post(search::count).get(search::count),
-        )
+        .route("/{index}/_search", post(search::search).get(search::search))
+        .route("/{index}/_count", post(search::count).get(search::count))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth::basic_auth,
