@@ -4,7 +4,9 @@ A lightweight, fake Elasticsearch (v8.10.0+) implementation written in Rust. Thi
 
 ## Current Compatibility
 
-The server emulates Elasticsearch behavior on port 9200.
+The server emulates Elasticsearch behavior, maintaining the basic response structures required by official clients. However, it is important to note that this project is a classic example of **vibe-coding** — the code was written quickly without much regard for enterprise standards, so the internal quality is, frankly, shit. 
+
+General compatibility is only maintained for the simplest "happy path" scenarios. If your use case relies on standard operations like `INSERT`, `UPDATE`, or simple `SEARCH` queries, ES-Fake should be sufficient. Nevertheless, weird API behaviors, specific protocol errors, and complex operations (such as nested aggregations, Painless scripts, or advanced cluster states) are not currently supported and likely never will be. If your system requires rigorous ES protocol validation or handling of specific edge cases, this solution will fail you.
 
 ### Supported API Endpoints:
 * **Information & Cluster**:
@@ -13,7 +15,8 @@ The server emulates Elasticsearch behavior on port 9200.
 * **Index Management**:
     * `PUT /{index}` - Create an index with optional mapping.
     * `HEAD /{index}` - Check if an index exists.
-    * `PUT /{index}/_mapping` - Update or extend existing index mappings.
+    * `GET/PUT /{index}/_mapping` - Retrieve or update/extend existing index mappings.
+    * `GET /{index}/_settings` - Retrieve basic index settings (shards/replicas).
     * `DELETE /{index}` - Delete an entire index and its data.
     * `POST /{index}/_refresh` - Simulated refresh operation (no-op for consistency).
 * **Document CRUD**:

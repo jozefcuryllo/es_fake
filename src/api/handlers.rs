@@ -5,15 +5,15 @@ use axum::{
     response::IntoResponse,
 };
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use std::collections::HashMap;
 
 use crate::AppState;
 use crate::api::responses::*;
 use crate::domain::engine::SearchEngine;
 use crate::domain::mapping::Mapping;
-use crate::domain::query::{parse_pagination, parse_query, parse_sort, parse_aggregations};
+use crate::domain::query::{parse_aggregations, parse_pagination, parse_query, parse_sort};
 
 fn to_error(
     status: StatusCode,
@@ -88,6 +88,26 @@ pub async fn create_index(
     }))
 }
 
+pub async fn get_mapping(
+    Path(index): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match state.store.get_index(&index) {
+        Some(idx) => Json(json!({
+            &index: {
+                "mappings": idx.mapping
+            }
+        }))
+        .into_response(),
+        None => to_error(
+            StatusCode::NOT_FOUND,
+            "index_not_found_exception",
+            &format!("no such index [{}]", index),
+        )
+        .into_response(),
+    }
+}
+
 pub async fn put_mapping(
     Path(index): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -96,6 +116,33 @@ pub async fn put_mapping(
     match state.store.update_mapping(&index, mapping) {
         Ok(_) => Json(json!({ "acknowledged": true })).into_response(),
         Err(e) => to_error(StatusCode::NOT_FOUND, "index_not_found_exception", &e).into_response(),
+    }
+}
+
+pub async fn get_settings(
+    Path(index): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if state.store.get_index(&index).is_some() {
+        Json(json!({
+            &index: {
+                "settings": {
+                    "index": {
+                        "number_of_shards": "1",
+                        "number_of_replicas": "0",
+                        "provided_name": index
+                    }
+                }
+            }
+        }))
+        .into_response()
+    } else {
+        to_error(
+            StatusCode::NOT_FOUND,
+            "index_not_found_exception",
+            &format!("no such index [{}]", index),
+        )
+        .into_response()
     }
 }
 
@@ -253,7 +300,11 @@ pub async fn count(
     })?;
 
     let query = parse_query(&query_json);
-    let filtered_docs: Vec<&Value> = index_data.documents.iter().filter(|d| query.matches(d)).collect();
+    let filtered_docs: Vec<&Value> = index_data
+        .documents
+        .iter()
+        .filter(|d| query.matches(d))
+        .collect();
 
     Ok(Json(CountResponse {
         count: filtered_docs.len(),
@@ -281,7 +332,8 @@ pub async fn search(
     let (from, size) = parse_pagination(&query_json);
     let agg_definitions = parse_aggregations(&query_json);
 
-    let filtered_docs = SearchEngine::search(&index_data.documents, query.as_ref(), sort, from, size);
+    let filtered_docs =
+        SearchEngine::search(&index_data.documents, query.as_ref(), sort, from, size);
 
     let hits: Vec<SearchHit> = filtered_docs
         .iter()
@@ -298,17 +350,29 @@ pub async fn search(
 
     let mut aggregations = None;
     if !agg_definitions.is_empty() {
-        let all_filtered = index_data.documents.iter().filter(|d| query.matches(d)).cloned().collect::<Vec<Value>>();
+        let all_filtered = index_data
+            .documents
+            .iter()
+            .filter(|d| query.matches(d))
+            .cloned()
+            .collect::<Vec<Value>>();
         let agg_results = SearchEngine::aggregate(&all_filtered, &agg_definitions);
-        
+
         let mut map = HashMap::new();
         for res in agg_results {
-            map.insert(res.name, AggregationBuckets {
-                buckets: res.buckets.into_iter().map(|b| BucketResponse {
-                    key: b.key,
-                    doc_count: b.doc_count,
-                }).collect()
-            });
+            map.insert(
+                res.name,
+                AggregationBuckets {
+                    buckets: res
+                        .buckets
+                        .into_iter()
+                        .map(|b| BucketResponse {
+                            key: b.key,
+                            doc_count: b.doc_count,
+                        })
+                        .collect(),
+                },
+            );
         }
         aggregations = Some(map);
     }
@@ -384,14 +448,22 @@ mod tests {
         let state = setup_state();
         let index = "test".to_string();
         state.store.create_index(index.clone(), Mapping::default());
-        state.store.add_document(&index, json!({"val": 10})).unwrap();
-        state.store.add_document(&index, json!({"val": 20})).unwrap();
+        state
+            .store
+            .add_document(&index, json!({"val": 10}))
+            .unwrap();
+        state
+            .store
+            .add_document(&index, json!({"val": 20}))
+            .unwrap();
 
         let response = count(
             Path(index),
             State(state),
-            Json(json!({"query": {"term": {"val": 10}}}))
-        ).await.unwrap();
+            Json(json!({"query": {"term": {"val": 10}}})),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(response.count, 1);
     }
@@ -408,7 +480,7 @@ mod tests {
             }
         });
         let m: Mapping = serde_json::from_value(new_mapping).unwrap();
-        
+
         let response = put_mapping(Path(index.clone()), State(state.clone()), Json(m))
             .await
             .into_response();
@@ -423,9 +495,18 @@ mod tests {
         let state = setup_state();
         let index = "agg-test".to_string();
         state.store.create_index(index.clone(), Mapping::default());
-        state.store.add_document(&index, json!({"tag": "A"})).unwrap();
-        state.store.add_document(&index, json!({"tag": "A"})).unwrap();
-        state.store.add_document(&index, json!({"tag": "B"})).unwrap();
+        state
+            .store
+            .add_document(&index, json!({"tag": "A"}))
+            .unwrap();
+        state
+            .store
+            .add_document(&index, json!({"tag": "A"}))
+            .unwrap();
+        state
+            .store
+            .add_document(&index, json!({"tag": "B"}))
+            .unwrap();
 
         let query = json!({
             "aggs": {
@@ -433,10 +514,12 @@ mod tests {
             }
         });
 
-        let response = search(Path(index), State(state), Json(query)).await.unwrap();
+        let response = search(Path(index), State(state), Json(query))
+            .await
+            .unwrap();
         let aggs = response.aggregations.clone().unwrap();
         let buckets = &aggs["tags"].buckets;
-        
+
         assert_eq!(buckets.len(), 2);
         assert_eq!(buckets[0].key, json!("A"));
         assert_eq!(buckets[0].doc_count, 2);
