@@ -52,11 +52,34 @@ impl Query for BoolQuery {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct TermsAggregation {
+    pub name: String,
+    pub field: String,
+}
+
 pub fn parse_query(json: &Value) -> Box<dyn Query> {
     if let Some(query_obj) = json.get("query") {
         return parse_query_internal(query_obj);
     }
     Box::new(MatchAllQuery)
+}
+
+pub fn parse_aggregations(json: &Value) -> Vec<TermsAggregation> {
+    let mut aggregations = Vec::new();
+    let aggs_node = json.get("aggs").or_else(|| json.get("aggregations"));
+
+    if let Some(aggs_obj) = aggs_node.and_then(|v| v.as_object()) {
+        for (name, body) in aggs_obj {
+            if let Some(terms) = body.get("terms").and_then(|t| t.get("field")).and_then(|f| f.as_str()) {
+                aggregations.push(TermsAggregation {
+                    name: name.clone(),
+                    field: terms.to_string(),
+                });
+            }
+        }
+    }
+    aggregations
 }
 
 pub fn parse_pagination(json: &Value) -> (usize, usize) {
@@ -238,5 +261,22 @@ mod tests {
         let (from, size) = parse_pagination(&body);
         assert_eq!(from, 0);
         assert_eq!(size, 10);
+    }
+
+    #[test]
+    fn should_parse_terms_aggregation() {
+        let body = json!({
+            "aggs": {
+                "popular_colors": {
+                    "terms": {
+                        "field": "color.keyword"
+                    }
+                }
+            }
+        });
+        let aggs = parse_aggregations(&body);
+        assert_eq!(aggs.len(), 1);
+        assert_eq!(aggs[0].name, "popular_colors");
+        assert_eq!(aggs[0].field, "color.keyword");
     }
 }

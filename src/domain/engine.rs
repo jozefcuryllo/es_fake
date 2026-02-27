@@ -1,6 +1,7 @@
-use crate::domain::query::Query;
+use crate::domain::query::{Query, TermsAggregation};
 use serde_json::Value;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub enum SortOrder {
@@ -12,6 +13,18 @@ pub enum SortOrder {
 pub struct SortOptions {
     pub field: String,
     pub order: SortOrder,
+}
+
+#[derive(Debug, Clone)]
+pub struct AggregationResult {
+    pub name: String,
+    pub buckets: Vec<Bucket>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Bucket {
+    pub key: Value,
+    pub doc_count: usize,
 }
 
 pub struct SearchEngine;
@@ -52,6 +65,50 @@ impl SearchEngine {
         }
 
         results.into_iter().skip(from).take(size).collect()
+    }
+
+    pub fn aggregate(
+        filtered_documents: &[Value],
+        aggregations: &[TermsAggregation],
+    ) -> Vec<AggregationResult> {
+        let mut results = Vec::new();
+
+        for agg in aggregations {
+            let field_name = agg.field.strip_suffix(".keyword").unwrap_or(&agg.field);
+            let mut counts: HashMap<String, (Value, usize)> = HashMap::new();
+
+            for doc in filtered_documents {
+                if let Some(val) = doc.get(field_name) {
+                    let key_str = match val {
+                        Value::String(s) => s.clone(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => continue,
+                    };
+
+                    let entry = counts.entry(key_str).or_insert((val.clone(), 0));
+                    entry.1 += 1;
+                }
+            }
+
+            let mut buckets: Vec<Bucket> = counts
+                .into_values()
+                .map(|(key, doc_count)| Bucket { key, doc_count })
+                .collect();
+
+            buckets.sort_by(|a, b| b.doc_count.cmp(&a.doc_count).then_with(|| {
+                let key_a = a.key.as_str().unwrap_or("");
+                let key_b = b.key.as_str().unwrap_or("");
+                key_a.cmp(key_b)
+            }));
+
+            results.push(AggregationResult {
+                name: agg.name.clone(),
+                buckets,
+            });
+        }
+
+        results
     }
 
     fn compare_values(a: &Value, b: &Value) -> Ordering {
@@ -162,5 +219,31 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0]["id"], 2);
         assert_eq!(results[1]["id"], 3);
+    }
+
+    #[test]
+    fn should_aggregate_terms_correctly() {
+        let docs = vec![
+            json!({"color": "red"}),
+            json!({"color": "blue"}),
+            json!({"color": "red"}),
+            json!({"color": "green"}),
+        ];
+        let aggs = vec![TermsAggregation {
+            name: "colors".to_string(),
+            field: "color.keyword".to_string(),
+        }];
+
+        let results = SearchEngine::aggregate(&docs, &aggs);
+        
+        assert_eq!(results.len(), 1);
+        let agg_res = &results[0];
+        assert_eq!(agg_res.name, "colors");
+        
+        let red_bucket = agg_res.buckets.iter().find(|b| b.key == json!("red")).unwrap();
+        assert_eq!(red_bucket.doc_count, 2);
+        
+        let blue_bucket = agg_res.buckets.iter().find(|b| b.key == json!("blue")).unwrap();
+        assert_eq!(blue_bucket.doc_count, 1);
     }
 }

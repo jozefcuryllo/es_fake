@@ -51,6 +51,13 @@ pub enum ValidationError {
 }
 
 impl Mapping {
+    pub fn update(&mut self, other: Mapping) {
+        for (key, value) in other.properties {
+            self.properties.insert(key, value);
+        }
+        self.dynamic = other.dynamic;
+    }
+
     pub fn validate(&self, document: &serde_json::Value) -> Result<(), ValidationError> {
         let obj = document.as_object().ok_or_else(|| ValidationError::InvalidType {
             field: "root".to_string(),
@@ -67,7 +74,7 @@ impl Mapping {
 
         if !self.dynamic {
             for key in obj.keys() {
-                if !self.properties.contains_key(key) {
+                if key != "_id" && !self.properties.contains_key(key) {
                     return Err(ValidationError::UnknownField(key.clone()));
                 }
             }
@@ -193,5 +200,27 @@ mod tests {
         });
 
         assert!(mapping.validate(&doc).is_ok());
+    }
+
+    #[test]
+    fn should_update_mapping_with_new_properties() {
+        let mut mapping = setup_mapping();
+        let mut new_properties = HashMap::new();
+        new_properties.insert(
+            "new_field".to_string(),
+            Property {
+                field_type: FieldType::Boolean,
+            },
+        );
+        let other = Mapping {
+            dynamic: true,
+            properties: new_properties,
+        };
+
+        mapping.update(other);
+
+        assert!(mapping.properties.contains_key("new_field"));
+        assert!(mapping.properties.contains_key("title"));
+        assert!(mapping.dynamic);
     }
 }

@@ -13,6 +13,7 @@ The server emulates Elasticsearch behavior on port 9200.
 * **Index Management**:
     * `PUT /{index}` - Create an index with optional mapping.
     * `HEAD /{index}` - Check if an index exists.
+    * `PUT /{index}/_mapping` - Update or extend existing index mappings.
     * `DELETE /{index}` - Delete an entire index and its data.
     * `POST /{index}/_refresh` - Simulated refresh operation (no-op for consistency).
 * **Document CRUD**:
@@ -23,19 +24,23 @@ The server emulates Elasticsearch behavior on port 9200.
     * `DELETE /{index}/_doc/{id}` - Delete a document by ID.
 * **Bulk Operations**:
     * `POST /_bulk` and `POST /{index}/_bulk` - Supports `index` actions in NDJSON format.
-* **Search**:
-    * `POST /{index}/_search` - Support for Query DSL.
+* **Search & Analytics**:
+    * `POST /{index}/_search` - Support for Query DSL and Aggregations.
+    * `GET /{index}/_search` - Alternative search entry point.
+    * `POST/GET /{index}/_count` - Fast document counting based on query.
 
-### Supported Query DSL:
+### Supported Query DSL & Features:
 * `match_all` - Retrieve all documents.
 * `term` - Exact field matching (includes automatic handling of `.keyword` suffixes).
 * `bool` - Filter combinations using `must`, `should`, and `must_not`.
+* **Aggregations**: Support for `terms` aggregation (bucket-based grouping).
 * **Pagination**: Support for `from` (offset) and `size` (limit) parameters.
 * **Sorting**: Support for the `sort` field (including `.keyword`) with `asc` and `desc` orders.
 
 ### Mapping & Response Format:
 * **Types**: `integer`, `float`, `boolean`, `keyword`, `text`, `date`.
 * **Dynamic Mapping**: Configurable `dynamic: true/false` at the index level.
+* **Mapping Updates**: Support for merging new properties into existing indices.
 * **Standardized Errors**: Nested error structures (e.g., `error.root_cause`) to match official client expectations.
 * **Metadata**: Responses include standard ES fields like `_shards`, `took`, and `timed_out`.
 
@@ -47,6 +52,7 @@ The server emulates Elasticsearch behavior on port 9200.
 ## Technical Stack
 * **Framework**: Axum.
 * **Storage**: In-Memory (DashMap) - data is cleared upon server restart.
+* **Design**: Clean architecture with strictly no external ORM/SQL libraries in the domain.
 
 ## Execution
 1. Set the environment variable (optional): `export ELASTIC_PASSWORD=your_password`

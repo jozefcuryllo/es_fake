@@ -48,6 +48,7 @@ async fn main() {
                 .head(handlers::check_index)
                 .delete(handlers::delete_index),
         )
+        .route("/{index}/_mapping", put(handlers::put_mapping))
         .route("/{index}/_doc", post(handlers::index_document))
         .route(
             "/{index}/_doc/{id}",
@@ -57,7 +58,8 @@ async fn main() {
                 .delete(handlers::delete_document),
         )
         .route("/{index}/_update/{id}", post(handlers::update_document))
-        .route("/{index}/_search", post(handlers::search))
+        .route("/{index}/_search", post(handlers::search).get(handlers::search))
+        .route("/{index}/_count", post(handlers::count).get(handlers::count))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             api::auth::basic_auth,

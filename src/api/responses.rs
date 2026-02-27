@@ -1,7 +1,8 @@
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashMap;
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct InfoResponse {
     pub name: String,
     pub cluster_name: String,
@@ -9,13 +10,13 @@ pub struct InfoResponse {
     pub tagline: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct VersionInfo {
     pub number: String,
     pub build_flavor: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct IndexResponse {
     pub _index: String,
     pub _id: String,
@@ -24,7 +25,7 @@ pub struct IndexResponse {
     pub _shards: ShardsInfo,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ShardsInfo {
     pub total: u32,
     pub successful: u32,
@@ -43,28 +44,41 @@ impl Default for ShardsInfo {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SearchResponse {
     pub took: u128,
     pub timed_out: bool,
     pub _shards: ShardsInfo,
     pub hits: HitsMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregations: Option<HashMap<String, AggregationBuckets>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
+pub struct AggregationBuckets {
+    pub buckets: Vec<BucketResponse>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct BucketResponse {
+    pub key: Value,
+    pub doc_count: usize,
+}
+
+#[derive(Serialize, Clone)]
 pub struct HitsMetadata {
     pub total: TotalHits,
     pub max_score: Option<f64>,
     pub hits: Vec<SearchHit>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct TotalHits {
     pub value: usize,
     pub relation: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SearchHit {
     pub _index: String,
     pub _id: String,
@@ -72,13 +86,13 @@ pub struct SearchHit {
     pub _source: Value,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ErrorResponse {
     pub error: ErrorDetails,
     pub status: u16,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ErrorDetails {
     pub root_cause: Vec<ErrorCause>,
     pub r#type: String,
@@ -87,7 +101,7 @@ pub struct ErrorDetails {
     pub index: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct ErrorCause {
     pub r#type: String,
     pub reason: String,
@@ -95,7 +109,7 @@ pub struct ErrorCause {
     pub index: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ClusterHealthResponse {
     pub cluster_name: String,
     pub status: String,
@@ -114,8 +128,14 @@ pub struct ClusterHealthResponse {
     pub active_shards_percent_as_number: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct RefreshResponse {
+    pub _shards: ShardsInfo,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CountResponse {
+    pub count: usize,
     pub _shards: ShardsInfo,
 }
 
@@ -135,5 +155,53 @@ pub fn create_error_response(status: u16, error_type: &str, reason: &str) -> Err
             index: None,
         },
         status,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn should_serialize_count_response() {
+        let resp = CountResponse {
+            count: 5,
+            _shards: ShardsInfo::default(),
+        };
+        let serialized = serde_json::to_string(&resp).unwrap();
+        assert!(serialized.contains(r#""count":5"#));
+    }
+
+    #[test]
+    fn should_serialize_search_response_with_aggregations() {
+        let mut aggs = HashMap::new();
+        aggs.insert(
+            "colors".to_string(),
+            AggregationBuckets {
+                buckets: vec![BucketResponse {
+                    key: json!("red"),
+                    doc_count: 10,
+                }],
+            },
+        );
+
+        let resp = SearchResponse {
+            took: 10,
+            timed_out: false,
+            _shards: ShardsInfo::default(),
+            hits: HitsMetadata {
+                total: TotalHits {
+                    value: 1,
+                    relation: "eq".to_string(),
+                },
+                max_score: None,
+                hits: vec![],
+            },
+            aggregations: Some(aggs),
+        };
+
+        let serialized = serde_json::to_string(&resp).unwrap();
+        assert!(serialized.contains(r#""aggregations":{"colors":{"buckets":[{"#));
     }
 }

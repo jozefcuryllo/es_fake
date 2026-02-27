@@ -7,12 +7,13 @@ use axum::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Instant;
+use std::collections::HashMap;
 
 use crate::AppState;
 use crate::api::responses::*;
 use crate::domain::engine::SearchEngine;
 use crate::domain::mapping::Mapping;
-use crate::domain::query::{parse_pagination, parse_query, parse_sort};
+use crate::domain::query::{parse_pagination, parse_query, parse_sort, parse_aggregations};
 
 fn to_error(
     status: StatusCode,
@@ -85,6 +86,17 @@ pub async fn create_index(
         "shards_acknowledged": true,
         "index": index
     }))
+}
+
+pub async fn put_mapping(
+    Path(index): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(mapping): Json<Mapping>,
+) -> impl IntoResponse {
+    match state.store.update_mapping(&index, mapping) {
+        Ok(_) => Json(json!({ "acknowledged": true })).into_response(),
+        Err(e) => to_error(StatusCode::NOT_FOUND, "index_not_found_exception", &e).into_response(),
+    }
 }
 
 pub async fn delete_index(
@@ -227,6 +239,28 @@ pub async fn delete_document(
     }
 }
 
+pub async fn count(
+    Path(index): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(query_json): Json<Value>,
+) -> Result<Json<CountResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let index_data = state.store.get_index(&index).ok_or_else(|| {
+        to_error(
+            StatusCode::NOT_FOUND,
+            "index_not_found_exception",
+            &format!("no such index [{}]", index),
+        )
+    })?;
+
+    let query = parse_query(&query_json);
+    let filtered_docs: Vec<&Value> = index_data.documents.iter().filter(|d| query.matches(d)).collect();
+
+    Ok(Json(CountResponse {
+        count: filtered_docs.len(),
+        _shards: ShardsInfo::default(),
+    }))
+}
+
 pub async fn search(
     Path(index): Path<String>,
     State(state): State<Arc<AppState>>,
@@ -245,22 +279,39 @@ pub async fn search(
     let query = parse_query(&query_json);
     let sort = parse_sort(&query_json);
     let (from, size) = parse_pagination(&query_json);
+    let agg_definitions = parse_aggregations(&query_json);
 
-    let filtered_docs =
-        SearchEngine::search(&index_data.documents, query.as_ref(), sort, from, size);
+    let filtered_docs = SearchEngine::search(&index_data.documents, query.as_ref(), sort, from, size);
 
     let hits: Vec<SearchHit> = filtered_docs
-        .into_iter()
+        .iter()
         .map(|doc| {
             let id = doc["_id"].as_str().unwrap_or("unknown").to_string();
             SearchHit {
                 _index: index.clone(),
                 _id: id,
                 _score: 1.0,
-                _source: doc,
+                _source: doc.clone(),
             }
         })
         .collect();
+
+    let mut aggregations = None;
+    if !agg_definitions.is_empty() {
+        let all_filtered = index_data.documents.iter().filter(|d| query.matches(d)).cloned().collect::<Vec<Value>>();
+        let agg_results = SearchEngine::aggregate(&all_filtered, &agg_definitions);
+        
+        let mut map = HashMap::new();
+        for res in agg_results {
+            map.insert(res.name, AggregationBuckets {
+                buckets: res.buckets.into_iter().map(|b| BucketResponse {
+                    key: b.key,
+                    doc_count: b.doc_count,
+                }).collect()
+            });
+        }
+        aggregations = Some(map);
+    }
 
     Ok(Json(SearchResponse {
         took: start.elapsed().as_millis(),
@@ -274,6 +325,7 @@ pub async fn search(
             max_score: if hits.is_empty() { None } else { Some(1.0) },
             hits,
         },
+        aggregations,
     }))
 }
 
@@ -325,6 +377,69 @@ mod tests {
             auth_password: "".to_string(),
             auth_enabled: false,
         })
+    }
+
+    #[tokio::test]
+    async fn should_handle_count_request() {
+        let state = setup_state();
+        let index = "test".to_string();
+        state.store.create_index(index.clone(), Mapping::default());
+        state.store.add_document(&index, json!({"val": 10})).unwrap();
+        state.store.add_document(&index, json!({"val": 20})).unwrap();
+
+        let response = count(
+            Path(index),
+            State(state),
+            Json(json!({"query": {"term": {"val": 10}}}))
+        ).await.unwrap();
+
+        assert_eq!(response.count, 1);
+    }
+
+    #[tokio::test]
+    async fn should_handle_mapping_update() {
+        let state = setup_state();
+        let index = "mapping-test".to_string();
+        state.store.create_index(index.clone(), Mapping::default());
+
+        let new_mapping = json!({
+            "properties": {
+                "new_field": { "type": "keyword" }
+            }
+        });
+        let m: Mapping = serde_json::from_value(new_mapping).unwrap();
+        
+        let response = put_mapping(Path(index.clone()), State(state.clone()), Json(m))
+            .await
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let idx = state.store.get_index(&index).unwrap();
+        assert!(idx.mapping.properties.contains_key("new_field"));
+    }
+
+    #[tokio::test]
+    async fn should_handle_search_with_aggregations() {
+        let state = setup_state();
+        let index = "agg-test".to_string();
+        state.store.create_index(index.clone(), Mapping::default());
+        state.store.add_document(&index, json!({"tag": "A"})).unwrap();
+        state.store.add_document(&index, json!({"tag": "A"})).unwrap();
+        state.store.add_document(&index, json!({"tag": "B"})).unwrap();
+
+        let query = json!({
+            "aggs": {
+                "tags": { "terms": { "field": "tag" } }
+            }
+        });
+
+        let response = search(Path(index), State(state), Json(query)).await.unwrap();
+        let aggs = response.aggregations.clone().unwrap();
+        let buckets = &aggs["tags"].buckets;
+        
+        assert_eq!(buckets.len(), 2);
+        assert_eq!(buckets[0].key, json!("A"));
+        assert_eq!(buckets[0].doc_count, 2);
     }
 
     #[tokio::test]

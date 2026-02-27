@@ -28,6 +28,21 @@ impl InMemoryStore {
         self.indices.insert(name, Arc::new(index_data));
     }
 
+    pub fn update_mapping(&self, name: &str, new_mapping: Mapping) -> Result<(), String> {
+        let mut index_ref = self
+            .indices
+            .get_mut(name)
+            .ok_or_else(|| "index_not_found_exception".to_string())?;
+
+        let current_data = index_ref.value();
+        let mut new_data = (**current_data).clone();
+        
+        new_data.mapping.update(new_mapping);
+        
+        *index_ref.value_mut() = Arc::new(new_data);
+        Ok(())
+    }
+
     pub fn delete_index(&self, name: &str) -> bool {
         self.indices.remove(name).is_some()
     }
@@ -143,6 +158,31 @@ mod tests {
             dynamic: false,
             properties,
         }
+    }
+
+    #[test]
+    fn should_update_mapping_in_store() {
+        let store = InMemoryStore::new();
+        store.create_index("test-index".to_string(), mock_mapping());
+
+        let mut new_props = HashMap::new();
+        new_props.insert(
+            "description".to_string(),
+            Property {
+                field_type: FieldType::Text,
+            },
+        );
+        let new_mapping = Mapping {
+            dynamic: true,
+            properties: new_props,
+        };
+
+        store.update_mapping("test-index", new_mapping).unwrap();
+
+        let index = store.get_index("test-index").unwrap();
+        assert!(index.mapping.properties.contains_key("id"));
+        assert!(index.mapping.properties.contains_key("description"));
+        assert!(index.mapping.dynamic);
     }
 
     #[test]
