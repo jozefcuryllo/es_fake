@@ -1,0 +1,10 @@
+services:
+  es-fake:
+    build: .
+    container_name: es-fake
+    stop_grace_period: 1s
+    ports:
+      - "9200:9200"
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    restart: unless-stopped
