@@ -13,7 +13,11 @@ pub async fn debug_log(req: Request<Body>, next: Next) -> Result<Response<Body>,
     }
 
     let (parts, body) = req.into_parts();
-    let bytes = buffer_body(body).await?;
+    let bytes = body
+        .collect()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .to_bytes();
     let req_str = String::from_utf8_lossy(&bytes);
 
     println!("--- DEBUG REQUEST ---");
@@ -26,7 +30,11 @@ pub async fn debug_log(req: Request<Body>, next: Next) -> Result<Response<Body>,
     let res = next.run(req).await;
 
     let (parts, body) = res.into_parts();
-    let res_bytes = buffer_body(body).await?;
+    let res_bytes = body
+        .collect()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .to_bytes();
     let res_str = String::from_utf8_lossy(&res_bytes);
 
     println!("--- DEBUG RESPONSE ---");

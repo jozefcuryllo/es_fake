@@ -15,10 +15,22 @@ pub async fn index_document(
     State(state): State<Arc<AppState>>,
     Json(doc): Json<Value>,
 ) -> Result<Json<IndexResponse>, (StatusCode, Json<ErrorResponse>)> {
+    if state.store.get_index(&index).is_none() {
+        state.store.create_index(index.clone(), crate::domain::mapping::Mapping::default());
+    }
+
     let id = state
         .store
         .add_document(&index, doc)
-        .map_err(|e| to_error(StatusCode::BAD_REQUEST, "mapper_parsing_exception", &e))?;
+        .map_err(|e| {
+            // Inteligenckie mapowanie błędów
+            let status = if e.contains("index_not_found") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            to_error(status, "mapper_parsing_exception", &e)
+        })?;
 
     Ok(Json(IndexResponse {
         _index: index,
