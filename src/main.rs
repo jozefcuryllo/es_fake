@@ -63,6 +63,7 @@ async fn main() {
                 .post(documents::index_document_with_id)
                 .delete(documents::delete_document),
         )
+        .route("/{index}/_delete_by_query", post(documents::delete_by_query))
         .route("/{index}/_update/{id}", post(documents::update_document))
         .route("/{index}/_search", post(search::search).get(search::search))
         .route("/{index}/_count", post(search::count).get(search::count))

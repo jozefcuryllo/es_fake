@@ -1,6 +1,7 @@
 use super::to_error;
 use crate::AppState;
 use crate::api::responses::{ErrorResponse, IndexResponse, ShardsInfo};
+use crate::domain::query::parse_query;
 use axum::{
     Json,
     extract::{Path, State},
@@ -16,21 +17,20 @@ pub async fn index_document(
     Json(doc): Json<Value>,
 ) -> Result<Json<IndexResponse>, (StatusCode, Json<ErrorResponse>)> {
     if state.store.get_index(&index).is_none() {
-        state.store.create_index(index.clone(), crate::domain::mapping::Mapping::default());
+        state
+            .store
+            .create_index(index.clone(), crate::domain::mapping::Mapping::default());
     }
 
-    let id = state
-        .store
-        .add_document(&index, doc)
-        .map_err(|e| {
-            // Inteligenckie mapowanie błędów
-            let status = if e.contains("index_not_found") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            to_error(status, "mapper_parsing_exception", &e)
-        })?;
+    let id = state.store.add_document(&index, doc).map_err(|e| {
+        // Inteligenckie mapowanie błędów
+        let status = if e.contains("index_not_found") {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        to_error(status, "mapper_parsing_exception", &e)
+    })?;
 
     Ok(Json(IndexResponse {
         _index: index,
@@ -116,7 +116,15 @@ pub async fn delete_document(
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
     if state.store.delete_document(&index, &id) {
-        StatusCode::OK.into_response()
+        Json(json!({
+            "_index": index,
+            "_id": id,
+            "_version": 1,
+            "result": "deleted",
+            "_shards": ShardsInfo::default(),
+            "status": 200
+        }))
+        .into_response()
     } else {
         to_error(
             StatusCode::NOT_FOUND,
@@ -210,6 +218,53 @@ pub async fn bulk(State(state): State<Arc<AppState>>, body: String) -> Json<Valu
     Json(json!({ "took": 1, "errors": false, "items": results }))
 }
 
+pub async fn delete_by_query(
+    Path(index): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(query_json): Json<Value>,
+) -> impl IntoResponse {
+    let index_data = match state.store.get_index(&index) {
+        Some(data) => data,
+        None => {
+            return to_error(
+                StatusCode::NOT_FOUND,
+                "index_not_found_exception",
+                &format!("no such index [{}]", index),
+            )
+            .into_response();
+        }
+    };
+
+    let query = parse_query(&query_json);
+    let ids_to_delete: Vec<String> = index_data
+        .documents
+        .iter()
+        .filter(|d| query.matches(d))
+        .filter_map(|d| d["_id"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    let deleted_count = ids_to_delete.len();
+    for id in ids_to_delete {
+        state.store.delete_document(&index, &id);
+    }
+
+    Json(json!({
+        "took": 1,
+        "timed_out": false,
+        "total": deleted_count,
+        "deleted": deleted_count,
+        "batches": 1,
+        "version_conflicts": 0,
+        "noops": 0,
+        "retries": { "bulk": 0, "search": 0 },
+        "throttled_millis": 0,
+        "requests_per_second": -1.0,
+        "throttled_until_millis": 0,
+        "failures": []
+    }))
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +341,22 @@ mod tests {
         assert_eq!(items[0]["index"]["result"], "created");
         assert_eq!(items[1]["update"]["result"], "updated");
         assert_eq!(items[2]["delete"]["result"], "deleted");
+    }
+
+    #[tokio::test]
+    async fn should_delete_by_query() {
+        let state = setup_state();
+        let index = "delete-query".to_string();
+        state.store.create_index(index.clone(), Mapping::default());
+        
+        state.store.add_document(&index, json!({ "status": "old", "_id": "1" })).unwrap();
+        state.store.add_document(&index, json!({ "status": "new", "_id": "2" })).unwrap();
+
+        let query = json!({ "query": { "term": { "status": "old" } } });
+        let response = delete_by_query(Path(index.clone()), State(state.clone()), Json(query)).await.into_response();
+        
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(state.store.get_document(&index, "1").is_none());
+        assert!(state.store.get_document(&index, "2").is_some());
     }
 }

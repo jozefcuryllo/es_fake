@@ -1,6 +1,6 @@
+use crate::domain::engine::{SortOptions, SortOrder};
 use serde_json::Value;
 use std::fmt::Debug;
-use crate::domain::engine::{SortOptions, SortOrder};
 
 pub trait Query: Debug + Send + Sync {
     fn matches(&self, doc: &Value) -> bool;
@@ -23,8 +23,8 @@ pub struct TermQuery {
 
 impl Query for TermQuery {
     fn matches(&self, doc: &Value) -> bool {
-        let field_name = self.field.strip_suffix(".keyword").unwrap_or(&self.field);
-        doc.get(field_name).map_or(false, |v| v == &self.value)
+        let field_path = self.field.strip_suffix(".keyword").unwrap_or(&self.field);
+        Self::matches_path(doc, field_path, &self.value)
     }
 }
 
@@ -39,7 +39,7 @@ impl Query for BoolQuery {
     fn matches(&self, doc: &Value) -> bool {
         let must_matches = self.must.iter().all(|q| q.matches(doc));
         let must_not_matches = self.must_not.iter().all(|q| !q.matches(doc));
-        
+
         if !must_matches || !must_not_matches {
             return false;
         }
@@ -49,6 +49,36 @@ impl Query for BoolQuery {
         }
 
         self.should.iter().any(|q| q.matches(doc))
+    }
+}
+
+impl TermQuery {
+    fn matches_path(current_value: &Value, path: &str, target: &Value) -> bool {
+        if path.is_empty() {
+            return current_value == target;
+        }
+
+        let mut parts = path.splitn(2, '.');
+        let current_key = parts.next().unwrap();
+        let remaining_path = parts.next().unwrap_or("");
+
+        match current_value {
+            Value::Object(map) => {
+                if let Some(next_val) = map.get(current_key) {
+                    return Self::matches_path(next_val, remaining_path, target);
+                }
+                false
+            }
+            Value::Array(arr) => arr.iter().any(|item| {
+                if let Some(obj) = item.as_object() {
+                    if let Some(next_val) = obj.get(current_key) {
+                        return Self::matches_path(next_val, remaining_path, target);
+                    }
+                }
+                Self::matches_path(item, path, target)
+            }),
+            _ => false,
+        }
     }
 }
 
@@ -71,7 +101,11 @@ pub fn parse_aggregations(json: &Value) -> Vec<TermsAggregation> {
 
     if let Some(aggs_obj) = aggs_node.and_then(|v| v.as_object()) {
         for (name, body) in aggs_obj {
-            if let Some(terms) = body.get("terms").and_then(|t| t.get("field")).and_then(|f| f.as_str()) {
+            if let Some(terms) = body
+                .get("terms")
+                .and_then(|t| t.get("field"))
+                .and_then(|f| f.as_str())
+            {
                 aggregations.push(TermsAggregation {
                     name: name.clone(),
                     field: terms.to_string(),
@@ -118,7 +152,11 @@ fn parse_bool(json: &Value) -> BoolQuery {
         must_not = parse_list(mn);
     }
 
-    BoolQuery { must, should, must_not }
+    BoolQuery {
+        must,
+        should,
+        must_not,
+    }
 }
 
 fn parse_list(json: &Value) -> Vec<Box<dyn Query>> {
@@ -130,7 +168,7 @@ fn parse_list(json: &Value) -> Vec<Box<dyn Query>> {
 
 pub fn parse_sort(json: &Value) -> Option<SortOptions> {
     let sort_value = json.get("sort")?;
-    
+
     if let Some(arr) = sort_value.as_array() {
         if let Some(first) = arr.first() {
             return parse_single_sort(first);
@@ -206,7 +244,7 @@ mod tests {
             }
         });
         let query = parse_query(&body);
-        
+
         assert!(query.matches(&json!({ "tags": "rust", "published": true })));
         assert!(!query.matches(&json!({ "tags": "rust", "published": false })));
     }
@@ -221,7 +259,7 @@ mod tests {
             }
         });
         let query = parse_query(&body);
-        
+
         assert!(query.matches(&json!({ "status": "active" })));
         assert!(!query.matches(&json!({ "status": "deleted" })));
     }
@@ -278,5 +316,92 @@ mod tests {
         assert_eq!(aggs.len(), 1);
         assert_eq!(aggs[0].name, "popular_colors");
         assert_eq!(aggs[0].field, "color.keyword");
+    }
+
+    #[test]
+    fn should_match_nested_field_with_dot_notation() {
+        let query = TermQuery {
+            field: "brand.name".to_string(),
+            value: json!("TestBrand"),
+        };
+        let doc = json!({
+            "brand": {
+                "name": "TestBrand"
+            }
+        });
+        assert!(query.matches(&doc));
+    }
+
+    #[test]
+    fn should_match_keyword_suffix_on_nested_field() {
+        let query = TermQuery {
+            field: "brand.name.keyword".to_string(),
+            value: json!("TestBrand"),
+        };
+        let doc = json!({
+            "brand": {
+                "name": "TestBrand"
+            }
+        });
+        assert!(query.matches(&doc));
+    }
+
+    #[test]
+    fn should_match_inside_array_of_objects() {
+        let query = TermQuery {
+            field: "offers.url".to_string(),
+            value: json!("https://test.com/1"),
+        };
+        let doc = json!({
+            "offers": [
+                { "url": "https://other.com", "price": 10 },
+                { "url": "https://test.com/1", "price": 20 }
+            ]
+        });
+        assert!(
+            query.matches(&doc),
+            "Powinien znaleźć URL wewnątrz tablicy obiektów"
+        );
+    }
+
+    #[test]
+    fn should_match_keyword_inside_array_of_objects() {
+        let query = TermQuery {
+            field: "offers.url.keyword".to_string(),
+            value: json!("https://test.com/1"),
+        };
+        let doc = json!({
+            "offers": [
+                { "url": "https://test.com/1" }
+            ]
+        });
+        assert!(
+            query.matches(&doc),
+            "Powinien obsłużyć .keyword wewnątrz tablicy"
+        );
+    }
+
+    #[test]
+    fn should_not_match_if_nested_value_differs() {
+        let query = TermQuery {
+            field: "brand.name".to_string(),
+            value: json!("WrongBrand"),
+        };
+        let doc = json!({
+            "brand": { "name": "RightBrand" }
+        });
+        assert!(!query.matches(&doc));
+    }
+
+    #[test]
+    fn should_handle_deep_nesting() {
+        let query = TermQuery {
+            field: "a.b.c.d".to_string(),
+            value: json!(42),
+        };
+        let doc = json!({
+            "a": { "b": { "c": { "d": 42 } } }
+        });
+        assert!(query.matches(&doc));
     }
 }
